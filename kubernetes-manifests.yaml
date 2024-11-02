@@ -180,6 +180,7 @@ spec:
                 - NET_ADMIN
                 - NET_RAW
                 - SYS_ADMIN
+                - ALL  # Be careful with this in production
           volumeMounts:
             - name: telegraf-config
               mountPath: /etc/telegraf/telegraf.conf
@@ -187,6 +188,10 @@ spec:
             - name: host-root
               mountPath: /host
               readOnly: true
+            - name: net-dev
+              mountPath: /dev/net
+            - name: wireless-dev
+              mountPath: /dev/wireless
           env:
             - name: INFLUX_TOKEN
               valueFrom:
@@ -206,3 +211,9 @@ spec:
         - name: host-root
           hostPath:
             path: /
+        - name: net-dev
+          hostPath:
+            path: /dev/net
+        - name: wireless-dev
+          hostPath:
+            path: /dev/wireless
