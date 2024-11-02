@@ -1,0 +1,208 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: network-monitoring
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: monitoring-secrets
+  namespace: network-monitoring
+type: Opaque
+data:
+  influxdb-admin-token: eW91cl9hZG1pbl90b2tlbl9oZXJl  # base64 encoded
+  influxdb-password: eW91cl9wYXNzd29yZF9oZXJl          # base64 encoded
+  grafana-password: eW91cl9ncmFmYW5hX3Bhc3N3b3JkX2hlcmU= # base64 encoded
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: influxdb-pvc
+  namespace: network-monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-pvc
+  namespace: network-monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: influxdb
+  namespace: network-monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: influxdb
+  template:
+    metadata:
+      labels:
+        app: influxdb
+    spec:
+      containers:
+        - name: influxdb
+          image: influxdb:2.7
+          ports:
+            - containerPort: 8086
+          volumeMounts:
+            - name: influxdb-storage
+              mountPath: /var/lib/influxdb2
+          env:
+            - name: DOCKER_INFLUXDB_INIT_MODE
+              value: "setup"
+            - name: DOCKER_INFLUXDB_INIT_USERNAME
+              value: "admin"
+            - name: DOCKER_INFLUXDB_INIT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: monitoring-secrets
+                  key: influxdb-password
+            - name: DOCKER_INFLUXDB_INIT_ORG
+              value: "your-org"
+            - name: DOCKER_INFLUXDB_INIT_BUCKET
+              value: "network-metrics"
+            - name: DOCKER_INFLUXDB_INIT_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: monitoring-secrets
+                  key: influxdb-admin-token
+      volumes:
+        - name: influxdb-storage
+          persistentVolumeClaim:
+            claimName: influxdb-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: influxdb
+  namespace: network-monitoring
+spec:
+  ports:
+    - port: 8086
+      targetPort: 8086
+  selector:
+    app: influxdb
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: network-monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:10.0.3
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - name: grafana-storage
+              mountPath: /var/lib/grafana
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: monitoring-secrets
+                  key: grafana-password
+      volumes:
+        - name: grafana-storage
+          persistentVolumeClaim:
+            claimName: grafana-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: network-monitoring
+spec:
+  ports:
+    - port: 3000
+      targetPort: 3000
+  selector:
+    app: grafana
+  type: LoadBalancer
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: telegraf
+  namespace: network-monitoring
+spec:
+  selector:
+    matchLabels:
+      app: telegraf
+  template:
+    metadata:
+      labels:
+        app: telegraf
+    spec:
+      hostNetwork: true
+      hostPID: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: telegraf
+          image: pleasebenice/telegraf-tshark:1.1
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+                - SYS_ADMIN
+          volumeMounts:
+            - name: telegraf-config
+              mountPath: /etc/telegraf/telegraf.conf
+              subPath: telegraf.conf
+            - name: host-root
+              mountPath: /host
+              readOnly: true
+          env:
+            - name: INFLUX_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: monitoring-secrets
+                  key: influxdb-admin-token
+            - name: HOST_PROC
+              value: /host/proc
+            - name: HOST_SYS
+              value: /host/sys
+            - name: HOST_ETC
+              value: /host/etc
+      volumes:
+        - name: telegraf-config
+          configMap:
+            name: telegraf-config
+        - name: host-root
+          hostPath:
+            path: /
